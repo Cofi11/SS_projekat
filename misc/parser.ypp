@@ -1,0 +1,308 @@
+%{
+  #include <iostream>
+  #include "inc/structures.hpp"
+  #include <vector>
+
+  extern int yylex();
+  extern void yyerror(std::vector<Line> &code, char *sp);
+  extern FILE* yyin;
+  extern int yyparse();
+
+%}
+
+%union {
+
+  char* strval;
+  int numval;
+  Directive dir;
+  Instruction ins;
+  Operand operand;
+  std::vector<SymbolLiteral>* symbolsLiterals;
+  std::vector<ExpressionOperand>* expression;
+}
+
+%token  COMMENT <strval> LABEL
+
+%token  COMMA PLUS MINUS DOLLAR OPEN_BRACKET CLOSED_BRACKET
+
+%token  DIR_GLOBAL DIR_EXTERN DIR_SECTION DIR_WORD
+        DIR_SKIP DIR_ASCII DIR_EQU DIR_END
+
+%token  INS_HALT INS_INT INS_IRET INS_CALL INS_RET INS_JMP
+        INS_BEQ INS_BNE INS_BGT INS_PUSH INS_POP INS_XCHG
+        INS_ADD INS_SUB INS_MUL INS_DIV INS_NOT INS_AND
+        INS_OR INS_XOR INS_SHL INS_SHR INS_LD INS_ST
+        INS_CSRRD INS_CSRWR
+
+%token <numval> REG <numval> CREG <numval> NUM <numval> NUM_OCT <numval> NUM_HEX 
+
+%token <strval> STRING <strval> SYMBOL 
+
+%token ENDL
+
+%type <dir> dir
+%type <ins> ins
+%type <operand> operand 
+%type <operand> operandPC 
+%type <numval> literal
+%type <symbolsLiterals> symbols
+%type <symbolsLiterals> syms_literals
+%type <expression> expr
+
+%parse-param {std::vector<Line> &code}
+
+%%
+
+program: lines;
+
+lines: line | lines ENDL line;
+
+line:
+       {printf("prazan red!\n");}
+    | COMMENT  {printf("samo komentar!\n");}
+    | LABEL  {printf("labela: %s\n", $1); Line l; l.type = LINE_LABEL; l.label = $1; code.push_back(l);}
+    | LABEL COMMENT  {printf("labela i komentar: %s\n", $1); Line l; l.type = LINE_LABEL; l.label = $1; code.push_back(l);}
+    | LABEL dir  {printf("labela i direktiva: %s\n", $1); Line l; l.type = LINE_DIR; l.label = $1; l.content.dir = $2; code.push_back(l);}
+    | LABEL ins  {printf("labela i instrukcija: %s\n", $1); Line l; l.type = LINE_INS; l.label = $1; l.content.ins = $2; code.push_back(l);}
+    | LABEL dir COMMENT  {printf("labela, direktiva i komentar: %s\n", $1); Line l; l.type = LINE_DIR; l.label = $1; l.content.dir = $2; code.push_back(l);}
+    | LABEL ins COMMENT  {printf("labela, instrukcija i komentar: %s\n", $1); Line l; l.type = LINE_INS; l.label = $1; l.content.ins = $2; code.push_back(l);}
+    | ins  {printf("instrukcija!\n"); Line l; l.type = LINE_INS; l.content.ins = $1; code.push_back(l);}
+    | ins COMMENT  {printf("instrukcija i komentar!\n"); Line l; l.type = LINE_INS; l.content.ins = $1; code.push_back(l);}
+    | dir  {printf("direktiva!\n"); Line l; l.type = LINE_DIR; l.content.dir = $1; code.push_back(l);}
+    | dir COMMENT  {printf("direktiva i komentar!\n"); Line l; l.type = LINE_DIR; l.content.dir = $1; code.push_back(l);};
+
+dir:
+      DIR_GLOBAL symbols {printf(".GLOBAL\n"); Directive d; d.type = GLOBAL; 
+                          d.symbols_literals = $2;
+                          d.expression = nullptr;
+                          $$ = d;}
+    | DIR_EXTERN symbols {printf(".EXTERN\n"); Directive d; d.type = EXTERN; d.symbols_literals = $2; d.expression = nullptr; $$ = d;}
+    | DIR_SECTION SYMBOL {printf(".SECTION\n"); Directive d; d.type = SECTION; 
+                          d.symbols_literals = new std::vector<SymbolLiteral>();
+                          SymbolLiteral sl; 
+                          sl.value.symbol = $2;
+                          sl.isSymbol = true; 
+                          d.symbols_literals->push_back(sl); 
+                          d.expression = nullptr;
+                          $$ = d;}
+    | DIR_WORD syms_literals {printf(".WORD\n"); Directive d; d.type = WORD; d.symbols_literals = $2; d.expression = nullptr; $$ = d;}
+    | DIR_SKIP literal {printf(".SKIP\n"); Directive d; d.type = SKIP;
+                        d.symbols_literals = new std::vector<SymbolLiteral>();
+                        SymbolLiteral sl; 
+                        sl.value.literal = $2;
+                        sl.isSymbol = false; 
+                        d.symbols_literals->push_back(sl); 
+                        d.expression = nullptr;
+                        $$ = d;}
+    | DIR_ASCII STRING {printf(".ASCII\n"); Directive d; d.type = ASCII; d.symbols_literals = nullptr; d.expression = nullptr; d.ascii_string = $2; $$ = d;}
+    | DIR_EQU SYMBOL COMMA expr {printf(".EQU\n"); Directive d; d.type = EQU;
+                                d.symbols_literals = new std::vector<SymbolLiteral>();
+                                SymbolLiteral sl; 
+                                sl.value.symbol = $2;
+                                sl.isSymbol = true; 
+                                d.symbols_literals->push_back(sl); 
+                                d.expression = $4;
+                                // for (auto &eo : *d.expression){
+                                //   if(eo.symbol.isSymbol){
+                                //     printf("symbol: %s\n", eo.symbol.value.symbol);
+                                //   }
+                                //   else{
+                                //     printf("literal: %d\n", eo.symbol.value.literal);
+                                //   }
+                                // }
+                                $$ = d;}
+    | DIR_END {printf(".END\n"); Directive d; d.type = END; d.symbols_literals = nullptr; d.expression = nullptr; $$ = d;};
+
+ins:
+      INS_HALT {printf("HALT\n"); Instruction i; i.type = HALT; i.op.type = OP_NONE; $$ = i;}
+    | INS_INT {printf("INT\n"); Instruction i; i.type = INT; i.op.type = OP_NONE; $$ = i;}
+    | INS_IRET {printf("IRET\n"); Instruction i; i.type = IRET; i.op.type = OP_NONE; $$ = i;}
+    | INS_CALL operandPC {printf("CALL\n"); Instruction i; i.type = CALL; i.op = $2;  $$ = i;}
+    | INS_RET {printf("RET\n"); Instruction i; i.type = RET; i.op.type = OP_NONE; $$ = i;}
+    | INS_JMP operandPC {printf("JMP\n"); Instruction i; i.type = JMP; i.op = $2; $$ = i;}
+    | INS_BEQ REG COMMA REG COMMA operandPC {printf("BEQ: reg%d, reg%d, operandPC\n", $2, $4); Instruction i; i.type = BEQ; i.regSrc = $2; i.regDst = $4; i.op = $6; $$ = i;}
+    | INS_BNE REG COMMA REG COMMA operandPC {printf("BNE: reg%d, reg%d, operandPC\n", $2, $4); Instruction i; i.type = BNE; i.regSrc = $2; i.regDst = $4; i.op = $6; $$ = i;}
+    | INS_BGT REG COMMA REG COMMA operandPC {printf("BGT: reg%d, reg%d, operandPC\n", $2, $4); Instruction i; i.type = BGT; i.regSrc = $2; i.regDst = $4; i.op = $6; $$ = i;}
+    | INS_PUSH REG {printf("PUSH: reg%d\n", $2); Instruction i; i.type = PUSH; i.regSrc = $2; i.op.type = OP_NONE; $$ = i;}
+    | INS_POP REG {printf("POP: reg%d\n", $2); Instruction i; i.type = POP; i.regDst = $2; i.op.type = OP_NONE; $$ = i;}
+    | INS_XCHG REG COMMA REG {printf("XCHG: reg%d, reg%d\n", $2, $4); Instruction i; i.type = XCHG; i.regSrc = $2; i.regDst = $4; i.op.type = OP_NONE; $$ = i;}
+    | INS_ADD REG COMMA REG {printf("ADD: reg%d, reg%d\n", $2, $4); Instruction i; i.type = ADD; i.regSrc = $2; i.regDst = $4; i.op.type = OP_NONE; $$ = i;}
+    | INS_SUB REG COMMA REG {printf("SUB: reg%d, reg%d\n", $2, $4); Instruction i; i.type = SUB; i.regSrc = $2; i.regDst = $4; i.op.type = OP_NONE; $$ = i;}
+    | INS_MUL REG COMMA REG {printf("MUL: reg%d, reg%d\n", $2, $4); Instruction i; i.type = MUL; i.regSrc = $2; i.regDst = $4; i.op.type = OP_NONE; $$ = i;}
+    | INS_DIV REG COMMA REG {printf("DIV: reg%d, reg%d\n", $2, $4); Instruction i; i.type = DIV; i.regSrc = $2; i.regDst = $4; i.op.type = OP_NONE; $$ = i;}
+    | INS_NOT REG {printf("NOT: reg%d\n", $2); Instruction i; i.type = NOT; i.regSrc = $2; i.op.type = OP_NONE; $$ = i;}
+    | INS_AND REG COMMA REG {printf("AND: reg%d, reg%d\n", $2, $4); Instruction i; i.type = AND; i.regSrc = $2; i.regDst = $4; i.op.type = OP_NONE; $$ = i;}
+    | INS_OR REG COMMA REG {printf("OR: reg%d, reg%d\n", $2, $4); Instruction i; i.type = OR; i.regSrc = $2; i.regDst = $4; i.op.type = OP_NONE; $$ = i;}
+    | INS_XOR REG COMMA REG {printf("XOR: reg%d, reg%d\n", $2, $4); Instruction i; i.type = XOR; i.regSrc = $2; i.regDst = $4; i.op.type = OP_NONE; $$ = i;}
+    | INS_SHL REG COMMA REG {printf("SHL: reg%d, reg%d\n", $2, $4); Instruction i; i.type = SHL; i.regSrc = $2; i.regDst = $4; i.op.type = OP_NONE; $$ = i;}
+    | INS_SHR REG COMMA REG {printf("SHR: reg%d, reg%d\n", $2, $4); Instruction i; i.type = SHR; i.regSrc = $2; i.regDst = $4; i.op.type = OP_NONE; $$ = i;}
+    | INS_LD operand COMMA REG {printf("LD: operand, reg%d\n", $4); Instruction i; i.type = LD; i.op = $2; i.regDst = $4; $$ = i;}
+    | INS_ST REG COMMA operand {printf("ST: reg%d, operand\n", $2); Instruction i; i.type = ST; i.op = $4; i.regSrc = $2; $$ = i;}
+    | INS_CSRRD CREG COMMA REG {printf("CSRRD: creg%d, reg%d\n", $2, $4); Instruction i; i.type = CSRRD; i.regSrc = $2; i.regDst = $4; i.op.type = OP_NONE; $$ = i;}
+    | INS_CSRWR REG COMMA CREG {printf("CSRRW: reg%d, creg%d\n", $2, $4); Instruction i; i.type = CSRWR; i.regSrc = $2; i.regDst = $4; i.op.type = OP_NONE; $$ = i;};
+
+literal:
+      NUM {printf("num: %d\n", $1); $$ = $1;}
+    | NUM_HEX {printf("numX: %d\n", $1); $$ = $1;} 
+    | NUM_OCT {printf("numO: %d\n", $1); $$ = $1;};
+
+symbols:
+      symbols COMMA SYMBOL { 
+          SymbolLiteral sl;
+          sl.value.symbol = $3;
+          sl.isSymbol = true;
+          $1->push_back(sl);
+          $$ = $1;
+      }
+    | SYMBOL { 
+          $$ = new std::vector<SymbolLiteral>();
+          SymbolLiteral sl;
+          sl.value.symbol = $1;
+          sl.isSymbol = true;
+          $$->push_back(sl);
+      }
+;
+
+syms_literals:
+      syms_literals COMMA literal { 
+          SymbolLiteral sl;
+          sl.value.literal = $3;
+          sl.isSymbol = false;
+          $1->push_back(sl);
+          $$ = $1;
+      }
+    | syms_literals COMMA SYMBOL { 
+          SymbolLiteral sl;
+          sl.value.symbol = $3;
+          sl.isSymbol = true;
+          $1->push_back(sl);
+          $$ = $1;
+      }
+    | literal { 
+          $$ = new std::vector<SymbolLiteral>();
+          SymbolLiteral sl;
+          sl.value.literal = $1;
+          sl.isSymbol = false;
+          $$->push_back(sl);
+      }
+    | SYMBOL { 
+          $$ = new std::vector<SymbolLiteral>();
+          SymbolLiteral sl;
+          sl.value.symbol = $1;
+          sl.isSymbol = true;
+          $$->push_back(sl);
+      }
+;
+
+operandPC:
+      literal {Operand o; o.type = OP_PC_LIT; o.value.imm.isSymbol = false; o.value.imm.value.literal = $1; $$ = o;}
+    | SYMBOL {Operand o; o.type = OP_PC_SYM; o.value.imm.isSymbol = true; o.value.imm.value.symbol = $1; $$ = o;};
+
+operand:
+      DOLLAR literal {Operand o; o.type = OP_IMM_LIT; o.value.imm.value.literal = $2; $$ = o;}
+    | DOLLAR SYMBOL {Operand o; o.type = OP_IMM_SYM; o.value.imm.value.symbol = $2; $$ = o;}
+    | literal {Operand o; o.type = OP_MEM_LIT; o.value.mem.value.literal = $1; $$ = o;}
+    | SYMBOL {Operand o; o.type = OP_MEM_SYM; o.value.mem.value.symbol = $1; $$ = o;}
+    | REG {Operand o; o.type = OP_REG; o.value.reg = $1; $$ = o;}
+    | OPEN_BRACKET REG CLOSED_BRACKET {Operand o; o.type = OP_REG_IND; o.value.reg = $2; $$ = o;}
+    | OPEN_BRACKET REG PLUS literal CLOSED_BRACKET {Operand o; o.type = OP_MEM_OFF_LIT; o.value.memOff.reg = $2; o.value.memOff.offset.value.literal = $4; $$ = o;}
+    | OPEN_BRACKET REG PLUS SYMBOL CLOSED_BRACKET {Operand o; o.type = OP_MEM_OFF_SYM; o.value.memOff.reg = $2; o.value.memOff.offset.value.symbol = $4; $$ = o;};
+
+/* ovo vrv treba srediti */
+expr: 
+      SYMBOL { 
+          $$ = new std::vector<ExpressionOperand>();
+          ExpressionOperand eo;
+          eo.symbol.value.symbol = $1;
+          eo.symbol.isSymbol = true;
+          eo.sign = 1;
+          $$->push_back(eo);
+      }
+    | literal { 
+          $$ = new std::vector<ExpressionOperand>();
+          ExpressionOperand eo;
+          eo.symbol.value.literal = $1;
+          eo.symbol.isSymbol = false;
+          eo.sign = 1;
+          $$->push_back(eo);
+      }  
+    | MINUS SYMBOL { 
+          $$ = new std::vector<ExpressionOperand>();
+          ExpressionOperand eo;
+          eo.symbol.value.symbol = $2;
+          eo.symbol.isSymbol = true;
+          eo.sign = -1;
+          $$->push_back(eo);
+      }
+    | MINUS literal { 
+          $$ = new std::vector<ExpressionOperand>();
+          ExpressionOperand eo;
+          eo.symbol.value.literal = $2;
+          eo.symbol.isSymbol = false;
+          eo.sign = -1;
+          $$->push_back(eo);
+      }
+    | expr PLUS SYMBOL { 
+          ExpressionOperand eo;
+          eo.symbol.value.symbol = $3;
+          eo.symbol.isSymbol = true;
+          eo.sign = 1;
+          $1->push_back(eo);
+          $$ = $1;
+      }
+    | expr PLUS literal { 
+          ExpressionOperand eo;
+          eo.symbol.value.literal = $3;
+          eo.symbol.isSymbol = false;
+          eo.sign = 1;
+          $1->push_back(eo);
+          $$ = $1;
+      }
+    | expr MINUS SYMBOL { 
+          ExpressionOperand eo;
+          eo.symbol.value.symbol = $3;
+          eo.symbol.isSymbol = true;
+          eo.sign = -1;
+          $1->push_back(eo);
+          $$ = $1;
+      }
+    | expr MINUS literal { 
+          ExpressionOperand eo;
+          eo.symbol.value.literal = $3;
+          eo.symbol.isSymbol = false;
+          eo.sign = -1;
+          $1->push_back(eo);
+          $$ = $1;
+      }
+
+%%
+
+
+/* int main(){
+
+  FILE* f = fopen("./tests/handler.S", "r");
+
+  if(!f){
+    printf("GRESKA BAJO");
+    return 1;
+  }
+
+  yyin = f;
+
+  int a = yyparse();
+
+  fclose(f);
+
+  printf("%d\n", a);
+
+  if(!a){
+    printf("TO JE TO\n");
+  }
+  else{
+    printf("NES NE VALJA\n");
+  }
+}
+
+void yyerror(char *sp){
+  printf("%s", sp);
+} */
